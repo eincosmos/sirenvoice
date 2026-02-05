@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+numpy
+librosa
+torch
+transformers
+soundfile
+
