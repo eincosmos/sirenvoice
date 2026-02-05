@@ -151,12 +151,20 @@ async def detect_voice(
         )
 
         return {
-            "status": "success",
-            "language": req.language,
-            "classification": classification,
-            "confidenceScore": result["score"],
-            "explanation": generate_explanation(result["verdict"])
-        }
+    "verdict": (
+        "AI_GENERATED"
+        if result["verdict"] in ("AI-Confident", "AI-Likely")
+        else "HUMAN"
+    ),
+    "confidence": float(result["score"]),
+    "model": "SirenVoice-v1",
+    "language": req.language,
+    "explanation": generate_explanation(result["verdict"]),
+    "metadata": {
+        "raw_score": float(result["score"])
+    }
+}
+
 
     except Exception:
         return {
