@@ -3,178 +3,101 @@ import io
 import numpy as np
 import librosa
 import torch
-import os
-
-from fastapi import FastAPI, Depends, Header, HTTPException
-from pydantic import BaseModel, validator
-
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from app.engine import XLSREngine
 
 # -------------------------
 # Torch safety
 # -------------------------
 torch.set_num_threads(1)
+torch.manual_seed(0)
+np.random.seed(0)
 
-# -------------------------
-# App
-# -------------------------
-app = FastAPI(title="SirenVoice – AI Voice Detection API")
+app = FastAPI(title="SirenVoice Forensic – Judge API")
 
-# -------------------------
-# Security
-# -------------------------
-# -------------------------
-# Security
-# -------------------------
-API_KEY = os.getenv("API_KEY")
-
-def verify_api_key(x_api_key: str = Header(None)):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-# -------------------------
-# Helpers
-# -------------------------
-SUPPORTED_LANGUAGES = {
-    "Tamil", "English", "Hindi", "Malayalam", "Telugu"
-}
-
-def is_mp3_bytes(data: bytes) -> bool:
-    # ID3 header
-    if data[:3] == b"ID3":
-        return True
-    # MPEG frame sync
-    if len(data) > 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
-        return True
-    return False
-
-# -------------------------
+# =========================
 # Request Model
-# -------------------------
-class VoiceRequest(BaseModel):
-    language: str
-    audioFormat: str
-    audioBase64: str
+# =========================
+class AudioInput(BaseModel):
+    audio_data: str        # Base64 MP3
+    language: str = "Unknown"
 
-    @validator("language")
-    def validate_language(cls, v):
-        if v not in SUPPORTED_LANGUAGES:
-            raise ValueError("Unsupported language")
-        return v
-
-    @validator("audioFormat")
-    def validate_format(cls, v):
-        if v.lower() != "mp3":
-            raise ValueError("Only mp3 format supported")
-        return v.lower()
-
-# -------------------------
-# Explanation
-# -------------------------
-def generate_explanation(verdict: str) -> str:
-    if verdict in ("AI-Confident", "AI-Likely"):
+# =========================
+# Explanation Engine
+# =========================
+def generate_explanation(is_ai: bool) -> str:
+    if is_ai:
         return (
             "Unnatural pitch consistency and reduced micro-variations "
-            "indicate characteristics commonly found in synthetic speech."
+            "indicate characteristics commonly found in AI-generated speech."
         )
     return (
-        "The voice exhibits natural biomechanical irregularities and "
-        "temporal variations consistent with human speech."
+        "Natural biomechanical irregularities and temporal variations "
+        "are consistent with human speech production."
     )
 
-# -------------------------
+# =========================
 # Core Auditor
-# -------------------------
+# =========================
 class SirenAuditor:
     def __init__(self):
         self.sr = 16000
-        self.neural = None
-
-    def _load_neural(self):
-        if self.neural is None:
-            self.neural = XLSREngine()
-
+        self.neural = XLSREngine()
 
     def analyze(self, audio_b64: str):
         try:
-            audio_bytes = base64.b64decode(audio_b64)
-            y, _ = librosa.load(io.BytesIO(audio_bytes), sr=self.sr, mono=True)
+            audio = base64.b64decode(audio_b64)
+            y, _ = librosa.load(io.BytesIO(audio), sr=self.sr, mono=True)
             y, _ = librosa.effects.trim(y, top_db=30)
 
             if len(y) < int(self.sr * 0.25):
-                return {"verdict": "Human-Likely", "score": 0.2}
+                return False, 0.20
 
             peak = np.max(np.abs(y))
             if peak > 0:
-                y /= peak
+                y = y / peak
 
         except Exception:
-            return {"verdict": "Human-Likely", "score": 0.2}
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid API key or malformed request"
+            )
 
-        self._load_neural()
-        neural = float(self.neural.infer_chunk(y))
+        neural_score = float(self.neural.infer_chunk(y))
 
-
-        if neural >= 0.66:
-            verdict = "AI-Likely"
-            score = max(neural, 0.75)
+        # ---- STRICT DECISION ----
+        if neural_score >= 0.66:
+            return True, round(max(neural_score, 0.75), 2)
         else:
-            verdict = "Human-Likely"
-            score = min(neural, 0.35)
+            return False, round(min(neural_score, 0.35), 2)
 
-        return {"verdict": verdict, "score": round(score, 3)}
-
-# -------------------------
-# Engine Init
-# -------------------------
+# =========================
+# API Hook
+# =========================
 auditor = SirenAuditor()
 
-# -------------------------
-# API Endpoint (FINAL)
-# -------------------------
-@app.post("/api/voice-detection")
-async def detect_voice(
-    req: VoiceRequest,
-    _: str = Depends(verify_api_key)
-):
+@app.post("/v1/detect")
+async def detect(item: AudioInput):
     try:
-        audio_bytes = base64.b64decode(req.audioBase64)
-
-        if not is_mp3_bytes(audio_bytes):
-            return {
-                "status": "error",
-                "message": "Invalid audio format. Only MP3 supported."
-            }
-
-        result = auditor.analyze(req.audioBase64)
-
-        classification = (
-            "AI_GENERATED"
-            if result["verdict"] in ("AI-Confident", "AI-Likely")
-            else "HUMAN"
-        )
+        is_ai, confidence = auditor.analyze(item.audio_data)
 
         return {
-    "verdict": (
-        "AI_GENERATED"
-        if result["verdict"] in ("AI-Confident", "AI-Likely")
-        else "HUMAN"
-    ),
-    "confidence": float(result["score"]),
-    "model": "SirenVoice-v1",
-    "language": req.language,
-    "explanation": generate_explanation(result["verdict"]),
-    "metadata": {
-        "raw_score": float(result["score"])
-    }
-}
+            "status": "success",
+            "language": item.language,
+            "classification": "AI_GENERATED" if is_ai else "HUMAN",
+            "confidenceScore": confidence,
+            "explanation": generate_explanation(is_ai)
+        }
 
+    except HTTPException:
+        return {
+            "status": "error",
+            "message": "Invalid API key or malformed request"
+        }
 
     except Exception:
         return {
             "status": "error",
-            "message": "Malformed request"
+            "message": "Invalid API key or malformed request"
         }
-@app.get("/health")
-async def health_check():
-    return {"status": "ready"}
