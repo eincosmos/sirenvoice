@@ -84,7 +84,12 @@ def generate_explanation(verdict: str) -> str:
 class SirenAuditor:
     def __init__(self):
         self.sr = 16000
-        self.neural = XLSREngine()
+        self.neural = None
+
+    def _load_neural(self):
+        if self.neural is None:
+            self.neural = XLSREngine()
+
 
     def analyze(self, audio_b64: str):
         try:
@@ -102,7 +107,9 @@ class SirenAuditor:
         except Exception:
             return {"verdict": "Human-Likely", "score": 0.2}
 
+        self._load_neural()
         neural = float(self.neural.infer_chunk(y))
+
 
         if neural >= 0.66:
             verdict = "AI-Likely"
