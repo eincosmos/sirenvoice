@@ -2,10 +2,13 @@ import torch
 import numpy as np
 from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
 
+# In engine.py
 class XLSREngine:
     def __init__(self):
         self.device = "cpu"
-        model_id = "facebook/wav2vec2-large-xlsr-53"
+        # Change 'large' to 'base' for much faster CPU inference
+        model_id = "facebook/wav2vec2-base-960h" 
+        # Or "facebook/wav2vec2-xlsr-53-espeak-cv-ft" if you need multilingual XLS-R specifically
 
         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_id)
         self.model = Wav2Vec2Model.from_pretrained(
