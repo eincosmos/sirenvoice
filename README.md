@@ -2,7 +2,6 @@
 
 > Real-time detection of AI-generated speech using neural deepfake classification + acoustic forensics.
 
-Built for **AMD Slingshot Hackathon 2026**
 
 ---
 
@@ -210,6 +209,3 @@ Fine-tuned on ASVspoof2019 — the standard benchmark for anti-spoofing research
 
 ---
 
-## Built At
-
-AMD Slingshot Hackathon · February 2026
