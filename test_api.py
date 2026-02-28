@@ -6,7 +6,7 @@ import time
 API_URL = "http://127.0.0.1:8000/v1/detect"
 
 FILES_TO_TEST = [
-    '''"/home/deveincosmos/Desktop/VOICE/AI/script1.mp3",
+    "/home/deveincosmos/Desktop/VOICE/AI/script1.mp3",
     "/home/deveincosmos/Desktop/VOICE/AI/script2.mp3",
     "/home/deveincosmos/Desktop/VOICE/AI/script3.mp3",
     "/home/deveincosmos/Desktop/VOICE/AI/script4.mp3",
@@ -16,10 +16,7 @@ FILES_TO_TEST = [
     "/home/deveincosmos/Desktop/VOICE/HUMAN/nihita.mp3",
     "/home/deveincosmos/Desktop/VOICE/HUMAN/pranesh.mp3",
     "/home/deveincosmos/Desktop/VOICE/HUMAN/sarvesh.mp3",
-    "/home/deveincosmos/Desktop/VOICE/HUMAN/subi.mp3",'''
-    "/home/deveincosmos/Desktop/VOICE/AI/script1.mp3",
-    "/home/deveincosmos/Desktop/voices/temp.wav"
-
+    "/home/deveincosmos/Desktop/VOICE/HUMAN/subi.mp3",
 ]
 
 def run_test():
@@ -43,14 +40,9 @@ def run_test():
         try:
             response = requests.post(
                 API_URL,
-                json={
-                    "language": "English",      # you can change later
-                    "audioFormat": "mp3",
-                    "audioBase64": audio_b64
-                },
-           timeout=30
+                json={"audio_data": audio_b64},
+                timeout=30
             )
-
         except Exception as e:
             print(f"\n[FILE]: {os.path.basename(path)}")
             print(f"--- REQUEST FAILED: {e}")

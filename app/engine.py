@@ -1,47 +1,104 @@
+"""
+engine.py — SirenVoice Neural Forensic Engine v4
+
+Replaces all XLSR-53 feature hacking with a model that was actually
+trained to detect deepfakes:
+
+  Gustking/wav2vec2-large-xlsr-deepfake-audio-classification
+  - Fine-tuned on ASVspoof2019
+  - Accuracy: 92.86%  |  F1: 0.936  |  EER: 4.01%
+  - Labels: {"fake": AI-generated, "real": human}
+
+The engine simply runs this classifier and returns the "fake" probability
+as the neural risk score. No manual feature engineering needed.
+"""
+
 import torch
 import numpy as np
-from transformers import Wav2Vec2Model, Wav2Vec2FeatureExtractor
+from transformers import pipeline, AutoFeatureExtractor, AutoModelForAudioClassification
+
+MODEL_ID = "Gustking/wav2vec2-large-xlsr-deepfake-audio-classification"
+
 
 class XLSREngine:
-    def __init__(self):
-        self.device = "cpu"
-        model_id = "facebook/wav2vec2-large-xlsr-53"
+    """
+    Neural forensic engine backed by a deepfake-detection fine-tuned model.
+    Returns a risk score in [0, 1] — higher = more likely AI/fake.
+    """
 
-        self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_id)
-        self.model = Wav2Vec2Model.from_pretrained(
-            model_id,
-            output_hidden_states=True
-        ).to(self.device)
+    def __init__(self, device: str = "cpu"):
+        self.device   = device
+        self.sr       = 16_000
 
+        print(f"[Engine] Loading {MODEL_ID} …")
+        self.extractor = AutoFeatureExtractor.from_pretrained(MODEL_ID)
+        self.model     = AutoModelForAudioClassification.from_pretrained(MODEL_ID).to(device)
         self.model.eval()
 
+        # Map label string → index so we can pull "fake" probability reliably
+        self.id2label  = self.model.config.id2label   # e.g. {0: "fake", 1: "real"}
+        self.fake_idx  = next(
+            (i for i, l in self.id2label.items() if l.lower() == "fake"),
+            0   # fallback: index 0
+        )
+        print(f"[Engine] Ready. Labels: {self.id2label}  fake_idx={self.fake_idx}")
+
+    # ------------------------------------------------------------------ #
+
     @torch.no_grad()
-    def infer_chunk(self, audio_chunk, sr=16000):
+    def infer_chunk(self, audio_chunk: np.ndarray, sr: int = 16_000) -> float:
+        """
+        Score a single audio chunk. Returns P(fake) in [0, 1].
+        """
         try:
-            inputs = self.feature_extractor(
+            inputs = self.extractor(
                 audio_chunk,
                 sampling_rate=sr,
-                return_tensors="pt"
+                return_tensors="pt",
+                padding=True,
             ).to(self.device)
 
-            outputs = self.model(**inputs)
+            logits = self.model(**inputs).logits          # (1, num_labels)
+            probs  = torch.softmax(logits, dim=-1)[0]     # (num_labels,)
+            fake_prob = probs[self.fake_idx].item()
 
-            if outputs.hidden_states is None:
-                return 0.5
-
-            # Stable forensic variance
-            layer = outputs.hidden_states[12]
-            var = torch.var(layer, dim=-1)
-            mean_var = torch.mean(var).item()
-            std_var = torch.std(var).item() + 1e-9
-
-            # Z-score → sigmoid (scale invariant)
-            z = (mean_var - 0.02) / std_var
-            neural_risk = 1 / (1 + np.exp(-z))
-
-            return float(round(neural_risk, 3))
+            return float(round(fake_prob, 4))
 
         except Exception as e:
             print(f"[XLSR ERROR] {e}")
             return 0.5
-	
+
+    @torch.no_grad()
+    def infer_segments(
+        self,
+        audio: np.ndarray,
+        sr: int = 16_000,
+        segment_sec: float = 5.0,
+        overlap_sec: float = 0.5,
+    ) -> float:
+        """
+        Weighted average over overlapping segments.
+        Longer segments get proportionally more weight.
+        """
+        seg_len = int(segment_sec * sr)
+        hop_len = int((segment_sec - overlap_sec) * sr)
+
+        if len(audio) <= seg_len:
+            return self.infer_chunk(audio, sr)
+
+        scores, weights = [], []
+        start = 0
+        while start < len(audio):
+            end   = min(start + seg_len, len(audio))
+            chunk = audio[start:end]
+            if len(chunk) >= int(sr * 0.5):          # skip very short tail
+                scores.append(self.infer_chunk(chunk, sr))
+                weights.append(len(chunk))
+            start += hop_len
+
+        if not scores:
+            return 0.5
+
+        return float(round(
+            np.average(scores, weights=np.array(weights, dtype=float)), 4
+        ))
